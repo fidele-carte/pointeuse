@@ -310,7 +310,8 @@ function vCa(){
   <p class="small">1,80 par défaut (ordre de grandeur sans réductions de charges). Près du SMIC, avec les réductions, le vrai chiffre est souvent plus bas : demande-le à ton comptable, ou calcule-le avec une fiche de paie (coût total employeur ÷ net payé).</p>`;
 }
 function payOf(v){const a=v.amount===''?null:Number(v.amount);
-  return v.ptype==='month'?{pay_type:'month',monthly_net:a,hourly_rate:null}:{pay_type:'hour',hourly_rate:a,monthly_net:null}}
+  const h=Number(v.hours)||0;
+  return v.ptype==='month'?{pay_type:'month',monthly_net:a,hourly_rate:a!==null&&h?Math.round(a/(h*52/12)*100)/100:null}:{pay_type:'hour',hourly_rate:a,monthly_net:null}}
 async function saveRev(el){
   const k=el.dataset.d,v=el.value.trim();
   const r=v===''?await sb.from('daily_revenue').delete().eq('restaurant_id',S.R).eq('day',k)
