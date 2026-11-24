@@ -203,18 +203,18 @@ function vTeam(){
   <label>Prénom Nom<input name="name" required maxlength="60"></label>
   <label>Code PIN (4 chiffres)<input name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4" required></label>
   <label>Contrat (h/semaine)<input name="hours" type="number" min="0" max="70" step="0.5" value="35"></label>
-  <label>Taux horaire brut (€)<input name="rate" type="number" min="0" max="200" step="0.01" inputmode="decimal"></label>
+  <label>Taux horaire net (€)<input name="rate" type="number" min="0" max="200" step="0.01" inputmode="decimal"></label>
   <button class="pri">Ajouter</button></form>
   <h3>Équipe</h3>${es.map(e=>{const locked=e.locked_until&&T(e.locked_until)>Date.now();
   return `<form class="box form fEmp" data-id="${esc(e.id)}"${e.active?'':' style="opacity:.6"'}>
   <label>Nom<input name="name" value="${esc(e.name)}" required maxlength="60"></label>
   <label>Contrat (h/sem.)<input name="hours" type="number" min="0" max="70" step="0.5" value="${esc(e.contract_hours??'')}"></label>
-  <label>Taux brut (€/h)<input name="rate" type="number" min="0" max="200" step="0.01" inputmode="decimal" value="${esc(e.hourly_rate??'')}"></label>
+  <label>Taux net (€/h)<input name="rate" type="number" min="0" max="200" step="0.01" inputmode="decimal" value="${esc(e.hourly_rate??'')}"></label>
   <label>Nouveau PIN (vide = inchangé)<input name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4"></label>
   <button class="sec">Enregistrer</button>
   <button type="button" class="sec" data-a="toggle" data-id="${esc(e.id)}">${e.active?'Désactiver':'Réactiver'}</button>
   ${locked?`<button type="button" class="sec" data-a="unlock" data-id="${esc(e.id)}">Débloquer (trop d'essais)</button>`:''}</form>`}).join('')||'<div class="empty">Personne pour l\'instant.</div>'}
-  <p class="small">Le taux horaire brut sert uniquement au calcul de la masse salariale (onglet Rentabilité). Un salarié désactivé disparaît de la pointeuse, ses heures restent dans l'historique. Les codes PIN sont chiffrés : personne ne peut les relire, on peut seulement les remplacer.</p>`;
+  <p class="small">Le taux horaire net sert uniquement au calcul des salaires et de la masse salariale (onglet Rentabilité). Un salarié désactivé disparaît de la pointeuse, ses heures restent dans l'historique. Les codes PIN sont chiffrés : personne ne peut les relire, on peut seulement les remplacer.</p>`;
 }
 function vDev(){
   const mine=store.get('pointeuse_token');
@@ -259,19 +259,20 @@ function vPlanning(){
   <p class="small">Un service qui finit après minuit (ex. 19:00–00:30) compte sur le jour où il commence.</p>`;
 }
 function caDay(k){
-  const r=resto(),coef=r?Number(r.charges_coef)||1.4:1.4;let ms=0,cost=0;const miss=new Set();
+  const r=resto(),coef=r?Number(r.charges_coef)||1.8:1.8;let ms=0,cost=0,net=0;const miss=new Set();
   S.shifts.filter(s=>sDay(s)===k).forEach(s=>{const m=shiftMs(s);ms+=m;const e=S.emps.find(x=>x.id===s.employee_id),rate=e&&Number(e.hourly_rate);
-    if(rate)cost+=m/3600000*rate*coef;else if(m)miss.add(e?e.name:'?')});
+    if(rate){net+=m/3600000*rate;cost+=m/3600000*rate*coef}else if(m)miss.add(e?e.name:'?')});
   const rv=S.rev.find(x=>x.day===k),ca=rv?Number(rv.amount):null;
-  return{ms,cost,ca,miss};
+  return{ms,cost,net,ca,miss};
 }
 function ratioTag(x){if(!isFinite(x)||x<=0)return '—';const c=x<=.30?'ok':x<=.35?'':'ko';return `<span class="tag ${c}">${pct(x)}</span>`}
 function caSummary(){
-  const n=new Date(S.month.getFullYear(),S.month.getMonth()+1,0).getDate();let ca=0,cost=0,ms=0,caCost=0;const miss=new Set();
-  for(let i=1;i<=n;i++){const k=ymd(new Date(S.month.getFullYear(),S.month.getMonth(),i)),d=caDay(k);ms+=d.ms;cost+=d.cost;d.miss.forEach(x=>miss.add(x));if(d.ca!==null){ca+=d.ca;caCost+=d.cost}}
+  const n=new Date(S.month.getFullYear(),S.month.getMonth()+1,0).getDate();let ca=0,cost=0,ms=0,caCost=0,net=0;const miss=new Set();
+  for(let i=1;i<=n;i++){const k=ymd(new Date(S.month.getFullYear(),S.month.getMonth(),i)),d=caDay(k);ms+=d.ms;cost+=d.cost;net+=d.net;d.miss.forEach(x=>miss.add(x));if(d.ca!==null){ca+=d.ca;caCost+=d.cost}}
   return `<div class="live">
   <div class="box"><div class="small">CA HT saisi</div><div class="kpi">${euro(ca)}</div></div>
-  <div class="box"><div class="small">Masse salariale estimée</div><div class="kpi">${euro(cost)}</div><div class="small">${dur(ms)} pointées</div></div>
+  <div class="box"><div class="small">Salaires nets</div><div class="kpi">${euro(net)}</div><div class="small">${dur(ms)} pointées</div></div>
+  <div class="box"><div class="small">Coût employeur estimé</div><div class="kpi">${euro(cost)}</div><div class="small">net × ${String(resto()?resto().charges_coef:1.8).replace('.',',')}</div></div>
   <div class="box"><div class="small">Ratio (jours avec CA saisi)</div><div class="kpi">${ca?pct(caCost/ca):'—'}</div></div></div>
   ${miss.size?`<div class="note">Taux horaire manquant pour : ${[...miss].map(esc).join(', ')} (à saisir dans Équipe). Leurs heures ne sont pas chiffrées.</div>`:''}`;
 }
@@ -280,13 +281,13 @@ function vCa(){
   const rows=[...Array(n)].map((_,i)=>{const d=new Date(S.month.getFullYear(),S.month.getMonth(),i+1),k=ymd(d),x=caDay(k);
     if(k>today&&x.ca===null&&!x.ms)return '';
     return `<tr><td>${DOW[(d.getDay()+6)%7]} ${d.getDate()}</td><td><input id="rev-${k}" class="rev" data-d="${k}" type="number" min="0" step="0.01" inputmode="decimal" value="${x.ca??''}" placeholder="—" aria-label="CA HT du ${k}" style="width:120px;text-align:right"></td>
-    <td>${x.ms?dur(x.ms):'—'}</td><td>${x.cost?euro(x.cost):'—'}</td><td id="rat-${k}">${x.ca?ratioTag(x.cost/x.ca):'—'}</td></tr>`}).join('');
+    <td>${x.ms?dur(x.ms):'—'}</td><td>${x.net?euro(x.net):'—'}</td><td>${x.cost?euro(x.cost):'—'}</td><td id="rat-${k}">${x.ca?ratioTag(x.cost/x.ca):'—'}</td></tr>`}).join('');
   return `<div class="row"><button class="sec" data-a="mo" data-n="-1">‹</button><h3 style="margin:0;text-transform:capitalize">${S.month.toLocaleDateString('fr-FR',{month:'long',year:'numeric'})}</h3><button class="sec" data-a="mo" data-n="1">›</button></div>
   <div id="caSum">${caSummary()}</div>
-  <div class="scroll"><table><thead><tr><th>Jour</th><th>CA HT (€)</th><th>Heures</th><th>Coût estimé</th><th>Ratio</th></tr></thead><tbody>${rows}</tbody></table></div>
-  <p class="small">Saisis le CA HT de chaque jour : il s'enregistre tout seul. Coût estimé = heures pointées × taux brut × coefficient de charges. Hors majorations d'heures sup, primes et congés : c'est un indicateur de pilotage, pas un calcul de paie. Couleurs : vert ≤ 30 %, orange ≤ 35 %, rouge au-delà (repère indicatif).</p>
-  <form id="fCoef" class="box form" style="max-width:520px"><label>Coefficient de charges (brut → coût employeur)<input name="coef" type="number" min="1" max="2.5" step="0.01" value="${esc(r?r.charges_coef:1.4)}"></label><button class="sec">Enregistrer</button></form>
-  <p class="small">1,40 par défaut. Demande le bon coefficient à ton comptable : il dépend des réductions de charges sur les bas salaires.</p>`;
+  <div class="scroll"><table><thead><tr><th>Jour</th><th>CA HT (€)</th><th>Heures</th><th>Salaires nets</th><th>Coût employeur</th><th>Ratio</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <p class="small">Saisis le CA HT de chaque jour : il s'enregistre tout seul. Salaires nets = heures pointées × taux net. Coût employeur = salaires nets × coefficient. Le ratio se calcule sur le coût employeur. Hors majorations d'heures sup, primes et congés : c'est un indicateur de pilotage, pas un calcul de paie. Couleurs : vert ≤ 30 %, orange ≤ 35 %, rouge au-delà (repère indicatif).</p>
+  <form id="fCoef" class="box form" style="max-width:520px"><label>Coefficient net → coût employeur<input name="coef" type="number" min="1" max="2.5" step="0.01" value="${esc(r?r.charges_coef:1.8)}"></label><button class="sec">Enregistrer</button></form>
+  <p class="small">1,80 par défaut (ordre de grandeur sans réductions de charges). Près du SMIC, avec les réductions, le vrai chiffre est souvent plus bas : demande-le à ton comptable, ou calcule-le avec une fiche de paie (coût total employeur ÷ net payé).</p>`;
 }
 async function saveRev(el){
   const k=el.dataset.d,v=el.value.trim();
