@@ -40,6 +40,9 @@ const pEnd=p=>pStart(p)+pLen(p);
 const sDay=s=>ymd(new Date(T(s.clock_in)));
 const euro=n=>n.toLocaleString('fr-FR',{style:'currency',currency:'EUR',maximumFractionDigits:0});
 const pct=x=>isFinite(x)?(x*100).toFixed(1).replace('.',',')+' %':'—';
+// taux horaire net effectif : horaire, ou mensuel ÷ (heures contrat × 52/12)
+const effRate=e=>{if(!e)return 0;if(e.pay_type==='month'){const h=Number(e.contract_hours)||0,m=Number(e.monthly_net)||0;return h&&m?m/(h*52/12):0}return Number(e.hourly_rate)||0};
+const payLabel=e=>e.pay_type==='month'?(e.monthly_net?String(e.monthly_net).replace('.',',')+' € net/mois':'mensuel à saisir'):(e.hourly_rate?String(e.hourly_rate).replace('.',',')+' € net/h':'taux à saisir');
 const planOf=(id,k)=>S.planned.filter(p=>p.employee_id===id&&p.day===k).sort((a,b)=>tmin(a.start_time)-tmin(b.start_time));
 const shiftsOf=(id,k)=>S.shifts.filter(s=>s.employee_id===id&&sDay(s)===k);
 const ERR={planned_empty:'Heure de début et de fin identiques.',pin_taken:'Ce code est déjà utilisé par un autre salarié.',pin_format:'Le code doit faire 4 chiffres.',forbidden:'Action non autorisée.',user_not_found:'Aucun compte avec cet email : crée-le d\'abord dans Supabase › Authentication.'};
@@ -88,7 +91,7 @@ async function loadResto(){
   S.loading=true;render();
   const [a,b]=range();
   const [e,s,d,pl,rv]=await Promise.all([
-    sb.from('employees').select('id,name,contract_hours,hourly_rate,active,locked_until').eq('restaurant_id',S.R).order('name'),
+    sb.from('employees').select('id,name,contract_hours,hourly_rate,pay_type,monthly_net,active,locked_until').eq('restaurant_id',S.R).order('name'),
     sb.from('shifts').select('id,employee_id,clock_in,clock_out,source').eq('restaurant_id',S.R).gte('clock_in',a.toISOString()).lt('clock_in',b.toISOString()).order('clock_in').limit(5000),
     sb.from('kiosk_devices').select('id,label,created_at,last_seen').eq('restaurant_id',S.R).order('created_at'),
     sb.from('planned_shifts').select('id,employee_id,day,start_time,end_time,note').eq('restaurant_id',S.R).gte('day',ymd(addD(a,-1))).lt('day',ymd(b)).order('day').limit(5000),
@@ -210,18 +213,21 @@ function vTeam(){
   <label>Prénom Nom<input name="name" required maxlength="60"></label>
   <label>Code PIN (4 chiffres)<input name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4" required></label>
   <label>Contrat (h/semaine)<input name="hours" type="number" min="0" max="70" step="0.5" value="35"></label>
-  <label>Taux horaire net (€)<input name="rate" type="number" min="0" max="200" step="0.01" inputmode="decimal"></label>
+  <label>Salaire<select name="ptype"><option value="hour">Net de l'heure</option><option value="month">Net par mois</option></select></label>
+  <label>Montant net (€)<input name="amount" type="number" min="0" max="20000" step="0.01" inputmode="decimal"></label>
   <button class="pri">Ajouter</button></form>
   <h3>Équipe</h3>${es.map(e=>{const locked=e.locked_until&&T(e.locked_until)>Date.now();
   return `<form class="box form fEmp" data-id="${esc(e.id)}"${e.active?'':' style="opacity:.6"'}>
   <label>Nom<input name="name" value="${esc(e.name)}" required maxlength="60"></label>
   <label>Contrat (h/sem.)<input name="hours" type="number" min="0" max="70" step="0.5" value="${esc(e.contract_hours??'')}"></label>
-  <label>Taux net (€/h)<input name="rate" type="number" min="0" max="200" step="0.01" inputmode="decimal" value="${esc(e.hourly_rate??'')}"></label>
+  <label>Salaire<select name="ptype"><option value="hour"${e.pay_type!=='month'?' selected':''}>Net de l'heure</option><option value="month"${e.pay_type==='month'?' selected':''}>Net par mois</option></select></label>
+  <label>Montant net (€)<input name="amount" type="number" min="0" max="20000" step="0.01" inputmode="decimal" value="${esc((e.pay_type==='month'?e.monthly_net:e.hourly_rate)??'')}"></label>
+  ${e.pay_type==='month'&&effRate(e)?`<div class="small" style="align-self:center">≈ ${effRate(e).toFixed(2).replace('.',',')} € net/h</div>`:''}
   <label>Nouveau PIN (vide = inchangé)<input name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4"></label>
   <button class="sec">Enregistrer</button>
   <button type="button" class="sec" data-a="toggle" data-id="${esc(e.id)}">${e.active?'Désactiver':'Réactiver'}</button>
   ${locked?`<button type="button" class="sec" data-a="unlock" data-id="${esc(e.id)}">Débloquer (trop d'essais)</button>`:''}</form>`}).join('')||'<div class="empty">Personne pour l\'instant.</div>'}
-  <p class="small">Le taux horaire net sert uniquement au calcul des salaires et de la masse salariale (onglet Rentabilité). Un salarié désactivé disparaît de la pointeuse, ses heures restent dans l'historique. Les codes PIN sont chiffrés : personne ne peut les relire, on peut seulement les remplacer.</p>`;
+  <p class="small">Le salaire (net de l'heure ou net par mois) sert uniquement au calcul de la masse salariale. Pour un salaire mensuel, l'appli le convertit en taux horaire : net mensuel ÷ (heures du contrat × 52 ÷ 12). Les heures du contrat sont donc obligatoires (onglet Rentabilité). Un salarié désactivé disparaît de la pointeuse, ses heures restent dans l'historique. Les codes PIN sont chiffrés : personne ne peut les relire, on peut seulement les remplacer.</p>`;
 }
 function vDev(){
   const mine=store.get('pointeuse_token');
@@ -267,7 +273,7 @@ function vPlanning(){
 }
 function caDay(k){
   const r=resto(),coef=r?Number(r.charges_coef)||1.8:1.8,miss=new Set();
-  const calc=items=>{let ms=0,net=0;items.forEach(({id,m})=>{ms+=m;const e=S.emps.find(x=>x.id===id),rate=e&&Number(e.hourly_rate);
+  const calc=items=>{let ms=0,net=0;items.forEach(({id,m})=>{ms+=m;const e=S.emps.find(x=>x.id===id),rate=effRate(e);
     if(rate)net+=m/3600000*rate;else if(m)miss.add(e?e.name:'?')});return{ms,net,cost:net*coef}};
   const real=calc(S.shifts.filter(s=>sDay(s)===k).map(s=>({id:s.employee_id,m:shiftMs(s)})));
   const plan=calc(S.planned.filter(p=>p.day===k).map(p=>({id:p.employee_id,m:pLen(p)})));
@@ -285,7 +291,7 @@ function caSummary(){
   <div class="box"><div class="small">CA HT saisi</div><div class="kpi">${euro(ca)}</div></div>
   <div class="box"><div class="small">Prévisionnel (planning)</div><div class="kpi">${euro(pc)}</div><div class="small">coût employeur · ${dur(pms)} · ${euro(pn)} net</div><div style="margin-top:6px">Ratio prévu ${ca?ratioTag(caP/ca):'—'}</div></div>
   <div class="box"><div class="small">Réel (pointages)</div><div class="kpi">${euro(rc)}</div><div class="small">coût employeur · ${dur(rms)} · ${euro(rn)} net</div><div style="margin-top:6px">Ratio réel ${ca&&rms?ratioTag(caR/ca):'—'}</div></div></div>
-  ${miss.size?`<div class="note">Taux horaire manquant pour : ${[...miss].map(esc).join(', ')} (à saisir dans Équipe). Leurs heures ne sont pas chiffrées.</div>`:''}`;
+  ${miss.size?`<div class="note">Salaire manquant (ou heures de contrat, pour un mensuel) pour : ${[...miss].map(esc).join(', ')} (à saisir dans Équipe). Leurs heures ne sont pas chiffrées.</div>`:''}`;
 }
 function caRow(k){
   const d=parse(k),x=caDay(k);
@@ -299,10 +305,12 @@ function vCa(){
   return `<div class="row"><button class="sec" data-a="mo" data-n="-1">‹</button><h3 style="margin:0;text-transform:capitalize">${S.month.toLocaleDateString('fr-FR',{month:'long',year:'numeric'})}</h3><button class="sec" data-a="mo" data-n="1">›</button></div>
   <div id="caSum">${caSummary()}</div>
   <div class="scroll"><table><thead><tr><th>Jour</th><th>CA HT (€)</th><th>H. prévues</th><th>Coût prévu</th><th>Ratio prévu</th><th>H. réelles</th><th>Coût réel</th><th>Ratio réel</th></tr></thead><tbody>${rows}</tbody></table></div>
-  <p class="small">Prévu = heures du planning. Réel = heures pointées. Coût = heures × taux net × coefficient. Tu peux saisir un CA estimé sur un jour à venir pour voir le ratio prévisionnel, puis le remplacer par le vrai CA. Hors majorations d'heures sup, primes et congés. Couleurs : vert ≤ 30 %, orange ≤ 35 %, rouge au-delà (repère indicatif).</p>
+  <p class="small">Prévu = heures du planning. Réel = heures pointées. Coût = heures × taux net de l'heure (ou mensuel converti en horaire) × coefficient. Tu peux saisir un CA estimé sur un jour à venir pour voir le ratio prévisionnel, puis le remplacer par le vrai CA. Hors majorations d'heures sup, primes et congés. Couleurs : vert ≤ 30 %, orange ≤ 35 %, rouge au-delà (repère indicatif).</p>
   <form id="fCoef" class="box form" style="max-width:520px"><label>Coefficient net → coût employeur<input name="coef" type="number" min="1" max="2.5" step="0.01" value="${esc(r?r.charges_coef:1.8)}"></label><button class="sec">Enregistrer</button></form>
   <p class="small">1,80 par défaut (ordre de grandeur sans réductions de charges). Près du SMIC, avec les réductions, le vrai chiffre est souvent plus bas : demande-le à ton comptable, ou calcule-le avec une fiche de paie (coût total employeur ÷ net payé).</p>`;
 }
+function payOf(v){const a=v.amount===''?null:Number(v.amount);
+  return v.ptype==='month'?{pay_type:'month',monthly_net:a,hourly_rate:null}:{pay_type:'hour',hourly_rate:a,monthly_net:null}}
 async function saveRev(el){
   const k=el.dataset.d,v=el.value.trim();
   const r=v===''?await sb.from('daily_revenue').delete().eq('restaurant_id',S.R).eq('day',k)
@@ -392,7 +400,7 @@ document.addEventListener('submit',async ev=>{
     S.msg='';boot();return;
   }
   if(f.id==='fAdd'){
-    const r=await sb.from('employees').insert({restaurant_id:S.R,name:v.name.trim(),contract_hours:v.hours===''?null:Number(v.hours),hourly_rate:v.rate===''?null:Number(v.rate),active:true}).select('id').single();
+    const r=await sb.from('employees').insert({restaurant_id:S.R,name:v.name.trim(),contract_hours:v.hours===''?null:Number(v.hours),...payOf(v),active:true}).select('id').single();
     if(r.error)return say(emsg(r.error),true);
     const p=await sb.rpc('set_employee_pin',{p_employee:r.data.id,p_pin:v.pin});
     if(p.error){await sb.from('employees').delete().eq('id',r.data.id);return say(emsg(p.error),true)}
@@ -401,7 +409,7 @@ document.addEventListener('submit',async ev=>{
   if(f.classList.contains('fEmp')){
     const id=f.dataset.id;
     if(v.pin){const p=await sb.rpc('set_employee_pin',{p_employee:id,p_pin:v.pin});if(p.error)return say(emsg(p.error),true)}
-    act(sb.from('employees').update({name:v.name.trim(),contract_hours:v.hours===''?null:Number(v.hours),hourly_rate:v.rate===''?null:Number(v.rate)}).eq('id',id),'Enregistré.');return;
+    act(sb.from('employees').update({name:v.name.trim(),contract_hours:v.hours===''?null:Number(v.hours),...payOf(v)}).eq('id',id),'Enregistré.');return;
   }
   if(f.id==='fPlan'){
     if(v.start===v.end)return say(ERR.planned_empty,true);
