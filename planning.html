@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#3470d0">
+<meta name="robots" content="noindex">
+<link rel="apple-touch-icon" href="icon.png">
+<title>Planning</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+.days{display:grid;gap:12px}
+.day h4{margin:0 0 8px;font-size:18px;text-transform:capitalize}
+.day.today{border-color:var(--red);border-width:2px}
+.ln{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-top:1px solid var(--line)}
+.ln:first-of-type{border-top:0}
+.ln b{font-weight:600}.ln span{white-space:nowrap;font-variant-numeric:tabular-nums}
+.ln.me{background:var(--onbg);color:var(--on);border-radius:8px;padding:6px 8px;font-weight:700}
+</style>
+</head>
+<body class="adm">
+<div id="app"><div class="top"><img class="logo s" src="logo.png" alt="Casa Di Meco"></div><div class="band"><p class="hint">Chargement…</p></div></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script>
+{
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad2=n=>String(n).padStart(2,'0');
+const ymd=d=>d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
+const addD=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x};
+const monday=d=>{const x=new Date(d.getFullYear(),d.getMonth(),d.getDate());return addD(x,-((x.getDay()+6)%7))};
+const tmin=t=>{const[h,m]=t.split(':').map(Number);return h*60+m};
+const len=p=>{let d=tmin(p.end)-tmin(p.start);if(d<=0)d+=1440;return d};
+const hh=m=>Math.floor(m/60)+'h'+pad2(m%60);
+const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+const token=new URLSearchParams(location.search).get('t')||'';
+const C=window.POINTEUSE_CONFIG||{};
+let sb=null;try{sb=supabase.createClient(C.url,C.key,{auth:{persistSession:false,autoRefreshToken:false}})}catch(e){}
+const S={week:monday(new Date()),data:null,me:store.get('planning_me')||'',err:''};
+
+function render(){
+  const app=$('#app'),top=`<div class="top"><div class="bar"><img class="logo s" src="logo.png" alt="Casa Di Meco"><div class="resto">Planning${S.data?' · '+esc(S.data.name):''}</div></div></div>`;
+  if(S.err){app.innerHTML=top+`<div class="band"><div class="empty">${esc(S.err)}</div></div>`;return}
+  if(!S.data){app.innerHTML=top+'<div class="band"><p class="hint">Chargement…</p></div>';return}
+  const d=S.data,names=Object.fromEntries(d.employees.map(e=>[e.id,e.name])),today=ymd(new Date());
+  const ds=[...Array(7)].map((_,i)=>addD(S.week,i));
+  const mine=d.shifts.filter(s=>s.employee_id===S.me),myTot=mine.reduce((a,s)=>a+len(s),0);
+  const cards=ds.map(day=>{const k=ymd(day),ss=d.shifts.filter(s=>s.day===k);
+    return `<div class="box day${k===today?' today':''}"><h4>${day.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}</h4>
+    ${ss.length?ss.map(s=>`<div class="ln${s.employee_id===S.me?' me':''}"><b>${esc(names[s.employee_id]||'')}</b><span>${esc(s.start)} – ${esc(s.end)}</span></div>`).join(''):'<div class="small">Personne au planning.</div>'}</div>`}).join('');
+  app.innerHTML=top+`<div class="band">
+  <div class="row"><button class="sec" data-n="-7">‹ Préc.</button><h3 style="margin:0">Semaine du ${S.week.toLocaleDateString('fr-FR',{day:'numeric',month:'short'})}</h3><button class="sec" data-n="7">Suiv. ›</button></div>
+  <div class="box"><label>Je suis<select id="me"><option value="">— choisir mon nom —</option>${d.employees.map(e=>`<option value="${esc(e.id)}"${e.id===S.me?' selected':''}>${esc(e.name)}</option>`).join('')}</select></label>
+  ${S.me?`<p style="margin:10px 0 0"><b>${mine.length} service${mine.length>1?'s':''}</b> cette semaine · ${hh(myTot)}</p>`:''}</div>
+  <div class="days">${cards}</div>
+  <p class="small">Planning mis à jour par le gérant. En cas de doute, demande-lui.</p></div>`;
+}
+async function load(){
+  if(!sb){S.err='Configuration manquante.';return render()}
+  if(!token){S.err='Lien incomplet : demande le lien du planning à ton gérant.';return render()}
+  const {data,error}=await sb.rpc('planning_week',{p_token:token,p_monday:ymd(S.week)});
+  if(error){S.err=/planning_invalid/.test(error.message||'')?'Ce lien n\'est plus valide : demande le nouveau lien à ton gérant.':'Pas de connexion, réessaie.';return render()}
+  S.err='';S.data=data;render();
+}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-n]');if(b){S.week=addD(S.week,+b.dataset.n);S.data=null;render();load()}});
+document.addEventListener('change',e=>{if(e.target.id==='me'){S.me=e.target.value;store.set('planning_me',S.me);render()}});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});
+render();load();
+}
+</script>
+</body>
+</html>

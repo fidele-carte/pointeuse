@@ -30,12 +30,12 @@ const C=window.POINTEUSE_CONFIG||{};
 let sb=null;
 try{sb=supabase.createClient(C.url,C.key,{auth:{persistSession:false,autoRefreshToken:false}})}catch(e){}
 
-const S={name:'',emps:[],offset:0,status:'loading',modal:null,netErr:false};
+const S={name:'',planning:null,emps:[],offset:0,status:'loading',modal:null,netErr:false};
 const now=()=>Date.now()+S.offset;
 
 function head(btn){
   return `<div class="top"><div class="hd"><img class="logo" src="logo.png" alt="${esc(S.name||'Casa Di Meco')}">
-  <div class="tm">${btn?'<a class="ghost" href="gerant.html" style="display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:12px;font-weight:700;text-decoration:none;margin-bottom:8px">Gérant</a>':''}
+  <div class="tm">${btn&&S.planning?'<a class="ghost" href="planning.html?t='+encodeURIComponent(S.planning)+'" style="display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:12px;font-weight:700;text-decoration:none;margin:0 8px 8px 0">Planning</a>':''}${btn?'<a class="ghost" href="gerant.html" style="display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:12px;font-weight:700;text-decoration:none;margin-bottom:8px">Gérant</a>':''}
   <div class="clock" id="clk"></div><div class="date" id="dt"></div></div></div></div><div class="mural" aria-hidden="true"></div>`;
 }
 function render(){
@@ -47,7 +47,7 @@ function render(){
   if(S.status==='loading'){app.innerHTML=head(false)+`<div class="band"><p class="hint">${S.netErr?'Pas de connexion internet, nouvel essai…':'Chargement…'}</p></div>`;return tick()}
   const cards=S.emps.map(e=>{const s=e.since?Date.parse(e.since):0;
     return `<button class="emp${s?' on':''}" data-a="emp" data-id="${esc(e.id)}"><b>${esc(e.name)}</b>
-    <span class="pill">${s?'En service depuis '+hm(s)+' · '+dur(now()-s):'Pas en service'}</span></button>`}).join('');
+    <span class="pill">${s?'En service depuis '+hm(s)+' · '+dur(now()-s):'Pas en service'}</span>${e.plan?`<span class="small">Prévu : ${esc(e.plan)}</span>`:''}</button>`}).join('');
   app.innerHTML=head(true)+`<div class="band">${S.netErr?'<div class="note">Connexion internet instable : les pointages peuvent échouer.</div>':''}
   <p class="hint">Touchez votre nom puis tapez votre code pour pointer votre arrivée ou votre départ.</p>
   ${S.emps.length?`<div class="grid">${cards}</div>`:'<div class="empty">Aucun salarié pour l\'instant. Le gérant les ajoute dans Gérant › Équipe.</div>'}</div>`;
@@ -85,7 +85,7 @@ async function load(){
     if(/kiosk_invalid/.test(error.message||'')){S.status='invalid'}else{S.netErr=true}
     return render();
   }
-  S.netErr=false;S.status='ok';S.name=data.name;S.emps=data.employees||[];
+  S.netErr=false;S.status='ok';S.name=data.name;S.planning=data.planning||null;S.emps=data.employees||[];
   S.offset=Date.parse(data.now)-Date.now();
   if(!S.modal)render();
 }
