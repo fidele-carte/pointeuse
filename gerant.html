@@ -267,18 +267,22 @@ function vPlanning(){
 }
 function caDay(k){
   const r=resto(),coef=r?Number(r.charges_coef)||1.8:1.8;let ms=0,cost=0,net=0;const miss=new Set();
-  S.shifts.filter(s=>sDay(s)===k).forEach(s=>{const m=shiftMs(s);ms+=m;const e=S.emps.find(x=>x.id===s.employee_id),rate=e&&Number(e.hourly_rate);
+  // heures pointées ; si aucun pointage ce jour-là, on prend le planning (prévisionnel)
+  const real=S.shifts.filter(s=>sDay(s)===k);
+  const items=real.length?real.map(s=>({id:s.employee_id,m:shiftMs(s)})):S.planned.filter(p=>p.day===k).map(p=>({id:p.employee_id,m:pLen(p)}));
+  const src=real.length?'réel':items.length?'prévu':'';
+  items.forEach(({id,m})=>{ms+=m;const e=S.emps.find(x=>x.id===id),rate=e&&Number(e.hourly_rate);
     if(rate){net+=m/3600000*rate;cost+=m/3600000*rate*coef}else if(m)miss.add(e?e.name:'?')});
   const rv=S.rev.find(x=>x.day===k),ca=rv?Number(rv.amount):null;
-  return{ms,cost,net,ca,miss};
+  return{ms,cost,net,ca,miss,src};
 }
 function ratioTag(x){if(!isFinite(x)||x<=0)return '—';const c=x<=.30?'ok':x<=.35?'':'ko';return `<span class="tag ${c}">${pct(x)}</span>`}
 function caSummary(){
-  const n=new Date(S.month.getFullYear(),S.month.getMonth()+1,0).getDate();let ca=0,cost=0,ms=0,caCost=0,net=0;const miss=new Set();
-  for(let i=1;i<=n;i++){const k=ymd(new Date(S.month.getFullYear(),S.month.getMonth(),i)),d=caDay(k);ms+=d.ms;cost+=d.cost;net+=d.net;d.miss.forEach(x=>miss.add(x));if(d.ca!==null){ca+=d.ca;caCost+=d.cost}}
+  const n=new Date(S.month.getFullYear(),S.month.getMonth()+1,0).getDate();let ca=0,cost=0,ms=0,caCost=0,net=0,est=0;const miss=new Set();
+  for(let i=1;i<=n;i++){const k=ymd(new Date(S.month.getFullYear(),S.month.getMonth(),i)),d=caDay(k);ms+=d.ms;cost+=d.cost;net+=d.net;if(d.src==='prévu')est++;d.miss.forEach(x=>miss.add(x));if(d.ca!==null){ca+=d.ca;caCost+=d.cost}}
   return `<div class="live">
   <div class="box"><div class="small">CA HT saisi</div><div class="kpi">${euro(ca)}</div></div>
-  <div class="box"><div class="small">Salaires nets</div><div class="kpi">${euro(net)}</div><div class="small">${dur(ms)} pointées</div></div>
+  <div class="box"><div class="small">Salaires nets</div><div class="kpi">${euro(net)}</div><div class="small">${dur(ms)} de travail${est?` · dont ${est} jour${est>1?'s':''} estimé${est>1?'s':''} sur le planning`:''}</div></div>
   <div class="box"><div class="small">Coût employeur estimé</div><div class="kpi">${euro(cost)}</div><div class="small">net × ${String(resto()?resto().charges_coef:1.8).replace('.',',')}</div></div>
   <div class="box"><div class="small">Ratio (jours avec CA saisi)</div><div class="kpi">${ca?pct(caCost/ca):'—'}</div></div></div>
   ${miss.size?`<div class="note">Taux horaire manquant pour : ${[...miss].map(esc).join(', ')} (à saisir dans Équipe). Leurs heures ne sont pas chiffrées.</div>`:''}`;
@@ -288,11 +292,11 @@ function vCa(){
   const rows=[...Array(n)].map((_,i)=>{const d=new Date(S.month.getFullYear(),S.month.getMonth(),i+1),k=ymd(d),x=caDay(k);
     if(k>today&&x.ca===null&&!x.ms)return '';
     return `<tr><td>${DOW[(d.getDay()+6)%7]} ${d.getDate()}</td><td><input id="rev-${k}" class="rev" data-d="${k}" type="number" min="0" step="0.01" inputmode="decimal" value="${x.ca??''}" placeholder="—" aria-label="CA HT du ${k}" style="width:120px;text-align:right"></td>
-    <td>${x.ms?dur(x.ms):'—'}</td><td>${x.net?euro(x.net):'—'}</td><td>${x.cost?euro(x.cost):'—'}</td><td id="rat-${k}">${x.ca?ratioTag(x.cost/x.ca):'—'}</td></tr>`}).join('');
+    <td>${x.ms?dur(x.ms):'—'}${x.src==='prévu'?'<div class="small">prévu</div>':''}</td><td>${x.net?euro(x.net):'—'}</td><td>${x.cost?euro(x.cost):'—'}</td><td id="rat-${k}">${x.ca?ratioTag(x.cost/x.ca):'—'}</td></tr>`}).join('');
   return `<div class="row"><button class="sec" data-a="mo" data-n="-1">‹</button><h3 style="margin:0;text-transform:capitalize">${S.month.toLocaleDateString('fr-FR',{month:'long',year:'numeric'})}</h3><button class="sec" data-a="mo" data-n="1">›</button></div>
   <div id="caSum">${caSummary()}</div>
   <div class="scroll"><table><thead><tr><th>Jour</th><th>CA HT (€)</th><th>Heures</th><th>Salaires nets</th><th>Coût employeur</th><th>Ratio</th></tr></thead><tbody>${rows}</tbody></table></div>
-  <p class="small">Saisis le CA HT de chaque jour : il s'enregistre tout seul. Salaires nets = heures pointées × taux net. Coût employeur = salaires nets × coefficient. Le ratio se calcule sur le coût employeur. Hors majorations d'heures sup, primes et congés : c'est un indicateur de pilotage, pas un calcul de paie. Couleurs : vert ≤ 30 %, orange ≤ 35 %, rouge au-delà (repère indicatif).</p>
+  <p class="small">Saisis le CA HT de chaque jour : il s'enregistre tout seul. Heures = pointages du jour ; s'il n'y en a pas encore, les heures du planning (marquées « prévu »). Salaires nets = heures × taux net. Coût employeur = salaires nets × coefficient. Le ratio se calcule sur le coût employeur. Hors majorations d'heures sup, primes et congés : c'est un indicateur de pilotage, pas un calcul de paie. Couleurs : vert ≤ 30 %, orange ≤ 35 %, rouge au-delà (repère indicatif).</p>
   <form id="fCoef" class="box form" style="max-width:520px"><label>Coefficient net → coût employeur<input name="coef" type="number" min="1" max="2.5" step="0.01" value="${esc(r?r.charges_coef:1.8)}"></label><button class="sec">Enregistrer</button></form>
   <p class="small">1,80 par défaut (ordre de grandeur sans réductions de charges). Près du SMIC, avec les réductions, le vrai chiffre est souvent plus bas : demande-le à ton comptable, ou calcule-le avec une fiche de paie (coût total employeur ÷ net payé).</p>`;
 }
