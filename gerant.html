@@ -266,37 +266,40 @@ function vPlanning(){
   <p class="small">Un service qui finit après minuit (ex. 19:00–00:30) compte sur le jour où il commence.</p>`;
 }
 function caDay(k){
-  const r=resto(),coef=r?Number(r.charges_coef)||1.8:1.8;let ms=0,cost=0,net=0;const miss=new Set();
-  // heures pointées ; si aucun pointage ce jour-là, on prend le planning (prévisionnel)
-  const real=S.shifts.filter(s=>sDay(s)===k);
-  const items=real.length?real.map(s=>({id:s.employee_id,m:shiftMs(s)})):S.planned.filter(p=>p.day===k).map(p=>({id:p.employee_id,m:pLen(p)}));
-  const src=real.length?'réel':items.length?'prévu':'';
-  items.forEach(({id,m})=>{ms+=m;const e=S.emps.find(x=>x.id===id),rate=e&&Number(e.hourly_rate);
-    if(rate){net+=m/3600000*rate;cost+=m/3600000*rate*coef}else if(m)miss.add(e?e.name:'?')});
+  const r=resto(),coef=r?Number(r.charges_coef)||1.8:1.8,miss=new Set();
+  const calc=items=>{let ms=0,net=0;items.forEach(({id,m})=>{ms+=m;const e=S.emps.find(x=>x.id===id),rate=e&&Number(e.hourly_rate);
+    if(rate)net+=m/3600000*rate;else if(m)miss.add(e?e.name:'?')});return{ms,net,cost:net*coef}};
+  const real=calc(S.shifts.filter(s=>sDay(s)===k).map(s=>({id:s.employee_id,m:shiftMs(s)})));
+  const plan=calc(S.planned.filter(p=>p.day===k).map(p=>({id:p.employee_id,m:pLen(p)})));
   const rv=S.rev.find(x=>x.day===k),ca=rv?Number(rv.amount):null;
-  return{ms,cost,net,ca,miss,src};
+  return{real,plan,ca,miss};
 }
 function ratioTag(x){if(!isFinite(x)||x<=0)return '—';const c=x<=.30?'ok':x<=.35?'':'ko';return `<span class="tag ${c}">${pct(x)}</span>`}
+function monthDays(){const n=new Date(S.month.getFullYear(),S.month.getMonth()+1,0).getDate();return [...Array(n)].map((_,i)=>ymd(new Date(S.month.getFullYear(),S.month.getMonth(),i+1)))}
 function caSummary(){
-  const n=new Date(S.month.getFullYear(),S.month.getMonth()+1,0).getDate();let ca=0,cost=0,ms=0,caCost=0,net=0,est=0;const miss=new Set();
-  for(let i=1;i<=n;i++){const k=ymd(new Date(S.month.getFullYear(),S.month.getMonth(),i)),d=caDay(k);ms+=d.ms;cost+=d.cost;net+=d.net;if(d.src==='prévu')est++;d.miss.forEach(x=>miss.add(x));if(d.ca!==null){ca+=d.ca;caCost+=d.cost}}
+  let ca=0,pc=0,rc=0,pn=0,rn=0,pms=0,rms=0,caP=0,caR=0;const miss=new Set();
+  monthDays().forEach(k=>{const d=caDay(k);d.miss.forEach(x=>miss.add(x));
+    pc+=d.plan.cost;rc+=d.real.cost;pn+=d.plan.net;rn+=d.real.net;pms+=d.plan.ms;rms+=d.real.ms;
+    if(d.ca!==null){ca+=d.ca;caP+=d.plan.cost;caR+=d.real.cost}});
   return `<div class="live">
   <div class="box"><div class="small">CA HT saisi</div><div class="kpi">${euro(ca)}</div></div>
-  <div class="box"><div class="small">Salaires nets</div><div class="kpi">${euro(net)}</div><div class="small">${dur(ms)} de travail${est?` · dont ${est} jour${est>1?'s':''} estimé${est>1?'s':''} sur le planning`:''}</div></div>
-  <div class="box"><div class="small">Coût employeur estimé</div><div class="kpi">${euro(cost)}</div><div class="small">net × ${String(resto()?resto().charges_coef:1.8).replace('.',',')}</div></div>
-  <div class="box"><div class="small">Ratio (jours avec CA saisi)</div><div class="kpi">${ca?pct(caCost/ca):'—'}</div></div></div>
+  <div class="box"><div class="small">Prévisionnel (planning)</div><div class="kpi">${euro(pc)}</div><div class="small">coût employeur · ${dur(pms)} · ${euro(pn)} net</div><div style="margin-top:6px">Ratio prévu ${ca?ratioTag(caP/ca):'—'}</div></div>
+  <div class="box"><div class="small">Réel (pointages)</div><div class="kpi">${euro(rc)}</div><div class="small">coût employeur · ${dur(rms)} · ${euro(rn)} net</div><div style="margin-top:6px">Ratio réel ${ca&&rms?ratioTag(caR/ca):'—'}</div></div></div>
   ${miss.size?`<div class="note">Taux horaire manquant pour : ${[...miss].map(esc).join(', ')} (à saisir dans Équipe). Leurs heures ne sont pas chiffrées.</div>`:''}`;
 }
+function caRow(k){
+  const d=parse(k),x=caDay(k);
+  return `<td>${DOW[(d.getDay()+6)%7]} ${d.getDate()}</td><td><input id="rev-${k}" class="rev" data-d="${k}" type="number" min="0" step="0.01" inputmode="decimal" value="${x.ca??''}" placeholder="—" aria-label="CA HT du ${k}" style="width:110px;text-align:right"></td>
+    <td>${x.plan.ms?dur(x.plan.ms):'—'}</td><td>${x.plan.cost?euro(x.plan.cost):'—'}</td><td>${x.ca&&x.plan.cost?ratioTag(x.plan.cost/x.ca):'—'}</td>
+    <td>${x.real.ms?dur(x.real.ms):'—'}</td><td>${x.real.cost?euro(x.real.cost):'—'}</td><td>${x.ca&&x.real.cost?ratioTag(x.real.cost/x.ca):'—'}</td>`;
+}
 function vCa(){
-  const r=resto(),n=new Date(S.month.getFullYear(),S.month.getMonth()+1,0).getDate(),today=ymd(new Date());
-  const rows=[...Array(n)].map((_,i)=>{const d=new Date(S.month.getFullYear(),S.month.getMonth(),i+1),k=ymd(d),x=caDay(k);
-    if(k>today&&x.ca===null&&!x.ms)return '';
-    return `<tr><td>${DOW[(d.getDay()+6)%7]} ${d.getDate()}</td><td><input id="rev-${k}" class="rev" data-d="${k}" type="number" min="0" step="0.01" inputmode="decimal" value="${x.ca??''}" placeholder="—" aria-label="CA HT du ${k}" style="width:120px;text-align:right"></td>
-    <td>${x.ms?dur(x.ms):'—'}${x.src==='prévu'?'<div class="small">prévu</div>':''}</td><td>${x.net?euro(x.net):'—'}</td><td>${x.cost?euro(x.cost):'—'}</td><td id="rat-${k}">${x.ca?ratioTag(x.cost/x.ca):'—'}</td></tr>`}).join('');
+  const r=resto();
+  const rows=monthDays().map(k=>`<tr id="row-${k}">${caRow(k)}</tr>`).join('');
   return `<div class="row"><button class="sec" data-a="mo" data-n="-1">‹</button><h3 style="margin:0;text-transform:capitalize">${S.month.toLocaleDateString('fr-FR',{month:'long',year:'numeric'})}</h3><button class="sec" data-a="mo" data-n="1">›</button></div>
   <div id="caSum">${caSummary()}</div>
-  <div class="scroll"><table><thead><tr><th>Jour</th><th>CA HT (€)</th><th>Heures</th><th>Salaires nets</th><th>Coût employeur</th><th>Ratio</th></tr></thead><tbody>${rows}</tbody></table></div>
-  <p class="small">Saisis le CA HT de chaque jour : il s'enregistre tout seul. Heures = pointages du jour ; s'il n'y en a pas encore, les heures du planning (marquées « prévu »). Salaires nets = heures × taux net. Coût employeur = salaires nets × coefficient. Le ratio se calcule sur le coût employeur. Hors majorations d'heures sup, primes et congés : c'est un indicateur de pilotage, pas un calcul de paie. Couleurs : vert ≤ 30 %, orange ≤ 35 %, rouge au-delà (repère indicatif).</p>
+  <div class="scroll"><table><thead><tr><th>Jour</th><th>CA HT (€)</th><th>H. prévues</th><th>Coût prévu</th><th>Ratio prévu</th><th>H. réelles</th><th>Coût réel</th><th>Ratio réel</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <p class="small">Prévu = heures du planning. Réel = heures pointées. Coût = heures × taux net × coefficient. Tu peux saisir un CA estimé sur un jour à venir pour voir le ratio prévisionnel, puis le remplacer par le vrai CA. Hors majorations d'heures sup, primes et congés. Couleurs : vert ≤ 30 %, orange ≤ 35 %, rouge au-delà (repère indicatif).</p>
   <form id="fCoef" class="box form" style="max-width:520px"><label>Coefficient net → coût employeur<input name="coef" type="number" min="1" max="2.5" step="0.01" value="${esc(r?r.charges_coef:1.8)}"></label><button class="sec">Enregistrer</button></form>
   <p class="small">1,80 par défaut (ordre de grandeur sans réductions de charges). Près du SMIC, avec les réductions, le vrai chiffre est souvent plus bas : demande-le à ton comptable, ou calcule-le avec une fiche de paie (coût total employeur ÷ net payé).</p>`;
 }
@@ -306,8 +309,9 @@ async function saveRev(el){
                 :await sb.from('daily_revenue').upsert({restaurant_id:S.R,day:k,amount:Number(v)});
   if(r.error)return say(emsg(r.error),true);
   S.rev=S.rev.filter(x=>x.day!==k);if(v!=='')S.rev.push({day:k,amount:Number(v)});
-  const x=caDay(k),rt=$('#rat-'+k),sm=$('#caSum');
-  if(rt)rt.innerHTML=x.ca?ratioTag(x.cost/x.ca):'—';if(sm)sm.innerHTML=caSummary();
+  const row=$('#row-'+k),sm=$('#caSum');
+  if(row){const tmp=document.createElement('tbody');tmp.innerHTML=`<tr>${caRow(k)}</tr>`;const nt=[...tmp.firstChild.children];[...row.children].forEach((td,i)=>{if(i>1)td.innerHTML=nt[i].innerHTML})}
+  if(sm)sm.innerHTML=caSummary();
   say('CA enregistré.');
 }
 
