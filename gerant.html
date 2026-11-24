@@ -47,7 +47,14 @@ const emsg=e=>{const m=(e&&e.message)||'';for(const k in ERR)if(m.includes(k))re
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
 
 const C=window.POINTEUSE_CONFIG||{};
-let sb=null;try{sb=supabase.createClient(C.url,C.key)}catch(e){}
+// Sur l'iPad pointeuse (appareil activé) : session gérant jamais gardée + déconnexion auto
+const KIOSK=!!store.get('pointeuse_token');
+let sb=null;try{sb=supabase.createClient(C.url,C.key,KIOSK?{auth:{persistSession:false,autoRefreshToken:false}}:{})}catch(e){}
+let idleT=null;
+function bumpIdle(){if(!KIOSK)return;clearTimeout(idleT);idleT=setTimeout(async()=>{if(S.user){await sb.auth.signOut();S.user=null;S.msg='Déconnecté automatiquement (iPad pointeuse).';S.err=false;render()}},120000)}
+['click','keydown','touchstart'].forEach(ev=>document.addEventListener(ev,bumpIdle,{passive:true}));
+// purge une éventuelle ancienne session gardée sur l'iPad
+if(KIOSK){try{Object.keys(localStorage).filter(k=>/^sb-.*-auth-token/.test(k)).forEach(k=>localStorage.removeItem(k))}catch(e){}}
 
 const S={user:null,isSuper:false,restos:[],R:store.get('pointeuse_resto'),tab:'direct',emps:[],shifts:[],devices:[],
   week:monday(new Date()),day:ymd(new Date()),month:new Date(new Date().getFullYear(),new Date().getMonth(),1),planned:[],rev:[],msg:'',err:false,loading:false,managers:{},allRestos:[]};
@@ -398,7 +405,10 @@ document.addEventListener('submit',async ev=>{
     const r=await sb.rpc('add_kiosk_device',{p_restaurant:S.R,p_label:v.label});
     if(r.error)return say(emsg(r.error),true);
     store.set('pointeuse_token',r.data);
-    say('Appareil activé. Ouvre la pointeuse avec le bouton en haut.');loadResto();return;
+    try{Object.keys(localStorage).filter(k=>/^sb-.*-auth-token/.test(k)).forEach(k=>localStorage.removeItem(k))}catch(e){}
+    await sb.auth.signOut();S.user=null;
+    S.msg='Appareil activé et gérant déconnecté. Tu peux ouvrir la pointeuse.';S.err=false;render();
+    setTimeout(()=>{location.href='index.html'},2500);return;
   }
   if(f.id==='fResto'){
     const r=await sb.from('restaurants').insert({name:v.name.trim()});
