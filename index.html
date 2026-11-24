@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Pointeuse">
+<meta name="theme-color" content="#3470d0">
+<link rel="apple-touch-icon" href="icon.png">
+<title>Pointeuse</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app"><div class="top"><img class="logo" src="logo.png" alt="Casa Di Meco"></div><div class="band"><p class="hint">Chargement…</p></div></div>
+<div id="modal"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script>
+{
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad2=n=>String(n).padStart(2,'0');
+const hm=ms=>{const d=new Date(ms);return pad2(d.getHours())+':'+pad2(d.getMinutes())};
+const dur=ms=>{const m=Math.max(0,Math.round(ms/60000));return Math.floor(m/60)+'h'+pad2(m%60)};
+const TOKEN_KEY='pointeuse_token';
+let token=null;try{token=localStorage.getItem(TOKEN_KEY)}catch(e){}
+const C=window.POINTEUSE_CONFIG||{};
+let sb=null;
+try{sb=supabase.createClient(C.url,C.key,{auth:{persistSession:false,autoRefreshToken:false}})}catch(e){}
+
+const S={name:'',emps:[],offset:0,status:'loading',modal:null,netErr:false};
+const now=()=>Date.now()+S.offset;
+
+function head(btn){
+  return `<div class="top"><div class="hd"><img class="logo" src="logo.png" alt="${esc(S.name||'Casa Di Meco')}">
+  <div class="tm">${btn?'<a class="ghost" href="gerant.html" style="display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:12px;font-weight:700;text-decoration:none;margin-bottom:8px">Gérant</a>':''}
+  <div class="clock" id="clk"></div><div class="date" id="dt"></div></div></div></div><div class="mural" aria-hidden="true"></div>`;
+}
+function render(){
+  const app=$('#app');
+  if(!sb){app.innerHTML=head(false)+`<div class="band"><div class="empty">Configuration manquante : remplir le fichier config.js.</div></div>`;return tick()}
+  if(S.status==='noToken'||S.status==='invalid'){
+    app.innerHTML=head(true)+`<div class="band"><div class="empty"><b>${S.status==='noToken'?'Cet appareil n\'est pas encore activé comme pointeuse.':'Cette pointeuse est désactivée ou l\'appareil a été retiré.'}</b><br>
+    Le gérant se connecte ici dans « Gérant », onglet Appareils, puis touche « Activer cet appareil ».</div></div>`;return tick()}
+  if(S.status==='loading'){app.innerHTML=head(false)+`<div class="band"><p class="hint">${S.netErr?'Pas de connexion internet, nouvel essai…':'Chargement…'}</p></div>`;return tick()}
+  const cards=S.emps.map(e=>{const s=e.since?Date.parse(e.since):0;
+    return `<button class="emp${s?' on':''}" data-a="emp" data-id="${esc(e.id)}"><b>${esc(e.name)}</b>
+    <span class="pill">${s?'En service depuis '+hm(s)+' · '+dur(now()-s):'Pas en service'}</span></button>`}).join('');
+  app.innerHTML=head(true)+`<div class="band">${S.netErr?'<div class="note">Connexion internet instable : les pointages peuvent échouer.</div>':''}
+  <p class="hint">Touchez votre nom puis tapez votre code pour pointer votre arrivée ou votre départ.</p>
+  ${S.emps.length?`<div class="grid">${cards}</div>`:'<div class="empty">Aucun salarié pour l\'instant. Le gérant les ajoute dans Gérant › Équipe.</div>'}</div>`;
+  tick();renderModal();
+}
+function tick(){
+  const c=$('#clk'),d=$('#dt'),n=new Date(now());
+  if(c)c.textContent=pad2(n.getHours())+':'+pad2(n.getMinutes());
+  if(d)d.textContent=n.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+}
+function renderModal(){
+  const m=S.modal,el=$('#modal');
+  if(!m){el.innerHTML='';return}
+  if(m.step==='pin'){
+    el.innerHTML=`<div class="ov" data-a="close"><div class="mod${m.err?' err':''}" data-stop>
+    <h2>${esc(m.name)}</h2><div class="small">Entrez votre code à 4 chiffres</div>
+    <div class="dots">${[0,1,2,3].map(i=>`<i class="${i<m.v.length?'f':''}"></i>`).join('')}</div>
+    <div class="msg">${esc(m.err||'')}</div>
+    <div class="pad">${[1,2,3,4,5,6,7,8,9].map(n=>`<button data-k="${n}" ${m.busy?'disabled':''}>${n}</button>`).join('')}
+    <button class="sm" data-a="close">Annuler</button><button data-k="0" ${m.busy?'disabled':''}>0</button><button class="sm" data-k="del">Effacer</button></div></div></div>`;
+  }else{
+    const r=m.r,at=Date.parse(r.at);
+    el.innerHTML=`<div class="ov" data-a="close"><div class="mod" data-stop><div class="ok">✓</div>
+    <h2>${r.type==='in'?'Arrivée':'Départ'} à ${hm(at)}</h2>
+    <div class="small">${esc(r.name)}${r.type==='out'&&r.since?' · service de '+dur(at-Date.parse(r.since)):''}</div>
+    <button class="big ${r.type==='in'?'in':'out'}" data-a="close">${r.type==='in'?'Bon service !':'Bonne fin de journée !'}</button></div></div>`;
+  }
+}
+
+async function load(){
+  if(!sb)return render();
+  if(!token){S.status='noToken';return render()}
+  const {data,error}=await sb.rpc('kiosk_state',{p_token:token});
+  if(error){
+    if(/kiosk_invalid/.test(error.message||'')){S.status='invalid'}else{S.netErr=true}
+    return render();
+  }
+  S.netErr=false;S.status='ok';S.name=data.name;S.emps=data.employees||[];
+  S.offset=Date.parse(data.now)-Date.now();
+  if(!S.modal)render();
+}
+
+let mTimer=null;
+function openModal(m,ms){S.modal=m;clearTimeout(mTimer);if(ms)mTimer=setTimeout(closeModal,ms);renderModal()}
+function closeModal(){if(S.modal&&S.modal.busy)return;S.modal=null;clearTimeout(mTimer);render()}
+
+async function key(k){
+  const m=S.modal;if(!m||m.step!=='pin'||m.busy)return;
+  m.err='';
+  if(k==='del')m.v=m.v.slice(0,-1);else if(m.v.length<4)m.v+=k;
+  renderModal();openModal(m,30000);
+  if(m.v.length<4)return;
+  m.busy=true;renderModal();
+  const {data,error}=await sb.rpc('kiosk_punch',{p_token:token,p_employee:m.id,p_pin:m.v});
+  m.busy=false;m.v='';
+  if(error){m.err=/kiosk_invalid/.test(error.message||'')?'Pointeuse désactivée.':'Pas de connexion, réessayez.';return openModal(m,30000)}
+  if(!data.ok){
+    m.err=data.error==='locked'?'Trop d\'essais : bloqué jusqu\'à '+hm(Date.parse(data.until)):data.error==='bad_pin'?'Code incorrect':'Salarié introuvable';
+    return openModal(m,30000);
+  }
+  openModal({step:'done',r:data},4000);
+  load();
+}
+
+document.addEventListener('click',ev=>{
+  const kb=ev.target.closest('[data-k]');if(kb){key(kb.dataset.k);return}
+  const t=ev.target.closest('[data-a],[data-stop]');if(!t)return;
+  if(t.hasAttribute('data-stop')&&!t.dataset.a)return;
+  const a=t.dataset.a;
+  if(a==='close'){closeModal();return}
+  if(a==='emp'){const e=S.emps.find(x=>x.id===t.dataset.id);if(e)openModal({step:'pin',id:e.id,name:e.name,v:''},30000)}
+});
+document.addEventListener('keydown',ev=>{if(S.modal&&S.modal.step==='pin'){if(/^\d$/.test(ev.key))key(ev.key);else if(ev.key==='Backspace')key('del');else if(ev.key==='Escape')closeModal()}});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});
+setInterval(tick,1000);
+setInterval(load,20000);
+render();load();
+}
+</script>
+</body>
+</html>

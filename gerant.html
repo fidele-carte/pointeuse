@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gérant">
+<meta name="theme-color" content="#3470d0">
+<link rel="apple-touch-icon" href="icon.png">
+<title>Espace gérant</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="adm">
+<div id="app"><div class="top"><img class="logo s" src="logo.png" alt="Casa Di Meco"></div><div class="band"><p class="hint">Chargement…</p></div></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script>
+{
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad2=n=>String(n).padStart(2,'0');
+const ymd=d=>d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
+const parse=s=>{const[y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d)};
+const addD=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x};
+const monday=d=>{const x=new Date(d.getFullYear(),d.getMonth(),d.getDate());return addD(x,-((x.getDay()+6)%7))};
+const hm=ms=>{const d=new Date(ms);return pad2(d.getHours())+':'+pad2(d.getMinutes())};
+const dur=ms=>{const m=Math.max(0,Math.round(ms/60000));return Math.floor(m/60)+'h'+pad2(m%60)};
+const dec=ms=>(ms/3600000).toFixed(2).replace('.',',');
+const T=s=>Date.parse(s);
+const DOW=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+const OPEN=20*3600000;
+const ERR={pin_taken:'Ce code est déjà utilisé par un autre salarié.',pin_format:'Le code doit faire 4 chiffres.',forbidden:'Action non autorisée.',user_not_found:'Aucun compte avec cet email : crée-le d\'abord dans Supabase › Authentication.'};
+const emsg=e=>{const m=(e&&e.message)||'';for(const k in ERR)if(m.includes(k))return ERR[k];return /fetch|network/i.test(m)?'Pas de connexion.':'Erreur : '+m};
+const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+
+const C=window.POINTEUSE_CONFIG||{};
+let sb=null;try{sb=supabase.createClient(C.url,C.key)}catch(e){}
+
+const S={user:null,isSuper:false,restos:[],R:store.get('pointeuse_resto'),tab:'direct',emps:[],shifts:[],devices:[],
+  week:monday(new Date()),day:ymd(new Date()),msg:'',err:false,loading:false,managers:{},allRestos:[]};
+
+const resto=()=>S.restos.find(r=>r.id===S.R);
+const empName=id=>(S.emps.find(e=>e.id===id)||{}).name||'?';
+const say=(m,err)=>{S.msg=m;S.err=!!err;const el=$('#flash');if(el){el.textContent=m;el.style.color=err?'var(--warn)':'var(--on)'}};
+
+/* ---------- data ---------- */
+async function boot(){
+  if(!sb){$('#app').innerHTML=top(false)+'<div class="band"><div class="empty">Configuration manquante : remplir le fichier config.js.</div></div>';return}
+  const {data}=await sb.auth.getSession();
+  S.user=data.session?data.session.user:null;
+  if(!S.user)return render();
+  const sa=await sb.from('superadmins').select('user_id').eq('user_id',S.user.id);
+  S.isSuper=!!(sa.data&&sa.data.length);
+  const r=await sb.from('restaurants').select('id,name,active').order('name');
+  S.restos=r.data||[];
+  if(!resto())S.R=S.restos[0]?S.restos[0].id:null;
+  await loadResto();
+}
+function range(){
+  const today=new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate());
+  if(S.tab==='semaine')return[S.week,addD(S.week,7)];
+  if(S.tab==='jour')return[parse(S.day),addD(parse(S.day),1)];
+  return[addD(today,-7),addD(today,1)];
+}
+async function loadResto(){
+  if(!S.R){if(S.isSuper&&S.tab==='admin')await loadAdmin();return render()}
+  S.loading=true;render();
+  const [a,b]=range();
+  const [e,s,d]=await Promise.all([
+    sb.from('employees').select('id,name,contract_hours,active,locked_until').eq('restaurant_id',S.R).order('name'),
+    sb.from('shifts').select('id,employee_id,clock_in,clock_out,source').eq('restaurant_id',S.R).gte('clock_in',a.toISOString()).lt('clock_in',b.toISOString()).order('clock_in').limit(5000),
+    sb.from('kiosk_devices').select('id,label,created_at,last_seen').eq('restaurant_id',S.R).order('created_at')]);
+  if(e.error||s.error){say(emsg(e.error||s.error),true)}
+  S.emps=e.data||[];S.shifts=s.data||[];S.devices=d.data||[];
+  if(S.isSuper&&S.tab==='admin')await loadAdmin();
+  S.loading=false;render();
+}
+async function loadAdmin(){
+  const r=await sb.from('restaurants').select('id,name,active,created_at').order('name');
+  S.allRestos=r.data||[];S.managers={};
+  await Promise.all(S.allRestos.map(async x=>{const m=await sb.rpc('list_managers',{p_restaurant:x.id});S.managers[x.id]=m.data||[]}));
+}
+async function act(p,ok){
+  try{const r=await p;if(r&&r.error)throw r.error;if(ok)say(ok);await loadResto()}catch(e){say(emsg(e),true);render()}
+}
+
+/* ---------- calculs ---------- */
+function shiftMs(s){if(s.clock_out)return T(s.clock_out)-T(s.clock_in);const o=Date.now()-T(s.clock_in);return o<OPEN?o:0}
+const isRun=s=>!s.clock_out&&Date.now()-T(s.clock_in)<OPEN;
+const isBad=s=>!s.clock_out&&Date.now()-T(s.clock_in)>=OPEN;
+
+/* ---------- vues ---------- */
+function top(full){
+  if(!full)return `<div class="top"><img class="logo s" src="logo.png" alt="Casa Di Meco"></div>`;
+  const tabs=[['direct','En direct'],['semaine','Heures semaine'],['jour','Pointages'],['equipe','Équipe'],['appareils','Appareils']];
+  if(S.isSuper)tabs.push(['admin','Restaurants']);
+  return `<div class="top"><div class="bar"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><img class="logo s" src="logo.png" alt="">
+  ${S.restos.length>1?`<select id="selR" aria-label="Restaurant">${S.restos.map(r=>`<option value="${esc(r.id)}"${r.id===S.R?' selected':''}>${esc(r.name)}</option>`).join('')}</select>`:`<div class="resto">${esc(resto()?resto().name:'')}</div>`}</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="ghost" href="index.html" style="display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border-radius:12px;font-weight:700;text-decoration:none">Pointeuse</a><button class="ghost" data-a="logout">Déconnexion</button></div></div>
+  <div class="tabs">${tabs.map(([k,l])=>`<button class="${S.tab===k?'a':''}" data-a="tab" data-t="${k}">${l}</button>`).join('')}</div></div>`;
+}
+function render(){
+  const app=$('#app');
+  if(!S.user){app.innerHTML=top(false)+`<div class="band center"><div class="box login"><h3>Espace gérant</h3>
+    <form id="fLogin"><label>Email<input name="email" type="email" autocomplete="username" required></label>
+    <label>Mot de passe<input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="pri">Se connecter</button><div class="msg" id="flash">${esc(S.msg)}</div></form></div></div>`;return}
+  if(!S.restos.length&&!S.isSuper){app.innerHTML=top(false)+`<div class="band"><div class="empty">Ton compte (${esc(S.user.email)}) n'est rattaché à aucun restaurant. Demande l'accès à l'administrateur.</div><p><button class="sec" data-a="logout">Déconnexion</button></p></div>`;return}
+  if(!S.R&&S.tab!=='admin')S.tab=S.isSuper?'admin':'direct';
+  const r=resto();
+  const body=({direct:vDirect,semaine:vWeek,jour:vDay,equipe:vTeam,appareils:vDev,admin:vAdmin})[S.tab]();
+  app.innerHTML=top(true)+`<div class="band">${r&&!r.active?'<div class="note">Ce restaurant est désactivé : la pointeuse est bloquée.</div>':''}
+  <div class="msg" id="flash" style="color:${S.err?'var(--warn)':'var(--on)'}">${esc(S.msg)}</div>${S.loading?'<p class="hint">Mise à jour…</p>':''}${body}</div>`;
+}
+function vDirect(){
+  const run=S.shifts.filter(isRun),bad=S.shifts.filter(isBad);
+  const today=ymd(new Date());
+  const tot={};S.shifts.filter(s=>ymd(new Date(T(s.clock_in)))===today).forEach(s=>tot[s.employee_id]=(tot[s.employee_id]||0)+shiftMs(s));
+  return `<div class="row"><h3 style="margin:0">En service maintenant</h3><span class="kpi">${run.length}</span><button class="sec" data-a="refresh">Actualiser</button></div>
+  ${run.length?`<div class="live">${run.map(s=>`<div class="box" style="border-color:var(--on)"><b>${esc(empName(s.employee_id))}</b><div class="small">Depuis ${hm(T(s.clock_in))} · ${dur(Date.now()-T(s.clock_in))}</div></div>`).join('')}</div>`:'<div class="empty">Personne en service.</div>'}
+  <h3 style="margin-top:24px">Aujourd'hui</h3>
+  ${Object.keys(tot).length?`<div class="scroll"><table><thead><tr><th>Salarié</th><th>Heures du jour</th></tr></thead><tbody>${Object.entries(tot).map(([id,ms])=>`<tr><td>${esc(empName(id))}</td><td>${dur(ms)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Aucun pointage aujourd\'hui.</div>'}
+  ${bad.length?`<h3 style="margin-top:24px">Départs non pointés (7 derniers jours)</h3>${bad.map(s=>`<div class="box"><b>${esc(empName(s.employee_id))}</b> · arrivé le ${new Date(T(s.clock_in)).toLocaleDateString('fr-FR')} à ${hm(T(s.clock_in))} <button class="sec" data-a="goDay" data-d="${ymd(new Date(T(s.clock_in)))}">Corriger</button></div>`).join('')}`:''}
+  <p class="small">Mise à jour automatique toutes les 30 secondes.</p>`;
+}
+function weekData(){
+  const ds=[...Array(7)].map((_,i)=>ymd(addD(S.week,i)));
+  return S.emps.filter(e=>e.active||S.shifts.some(s=>s.employee_id===e.id)).map(e=>{
+    let tot=0;const cells=ds.map(k=>{const ss=S.shifts.filter(s=>s.employee_id===e.id&&ymd(new Date(T(s.clock_in)))===k);
+      const t=ss.reduce((a,s)=>a+shiftMs(s),0);tot+=t;return{t,has:ss.length>0,run:ss.some(isRun),bad:ss.some(isBad)}});
+    return{e,cells,tot};
+  });
+}
+function vWeek(){
+  const ds=[...Array(7)].map((_,i)=>addD(S.week,i)),end=ds[6];
+  const rows=weekData().map(({e,cells,tot})=>{const c=Number(e.contract_hours)||0,diff=tot-c*3600000;
+    return `<tr><td>${esc(e.name)}</td>${cells.map(x=>`<td class="${x.bad?'bad':x.run?'run':''}">${x.bad?'⚠ ':''}${x.has?dur(x.t):'—'}</td>`).join('')}<td><b>${dur(tot)}</b></td><td>${c?c+'h':'—'}</td><td>${c?(diff>=0?'+':'−')+dur(Math.abs(diff)):'—'}</td></tr>`}).join('');
+  return `<div class="row"><button class="sec" data-a="wk" data-n="-7">‹ Préc.</button>
+  <h3 style="margin:0">Semaine du ${S.week.toLocaleDateString('fr-FR',{day:'numeric',month:'short'})} au ${end.toLocaleDateString('fr-FR',{day:'numeric',month:'short',year:'numeric'})}</h3>
+  <button class="sec" data-a="wk" data-n="7">Suiv. ›</button></div>
+  <div class="scroll"><table><thead><tr><th>Salarié</th>${ds.map((d,i)=>`<th>${DOW[i]} ${d.getDate()}</th>`).join('')}<th>Total</th><th>Contrat</th><th>Écart</th></tr></thead>
+  <tbody>${rows||'<tr><td colspan="11">Aucun pointage cette semaine.</td></tr>'}</tbody></table></div>
+  <p class="small">En vert : service en cours. ⚠ : départ non pointé (à corriger dans Pointages). Un service qui passe minuit compte sur le jour d'arrivée.</p>
+  <div class="row"><button class="pri" data-a="csv" data-r="week">Exporter la semaine (CSV)</button><button class="sec" data-a="csv" data-r="month">Exporter le mois (CSV)</button></div>`;
+}
+function vDay(){
+  const k=S.day;
+  const list=S.emps.filter(e=>e.active||S.shifts.some(s=>s.employee_id===e.id)).map(e=>{
+    const ss=S.shifts.filter(s=>s.employee_id===e.id);
+    return `<div class="box"><b>${esc(e.name)}</b>${ss.map(s=>`<div class="shift" data-id="${esc(s.id)}" data-e="${esc(e.id)}">
+      <input type="time" value="${hm(T(s.clock_in))}" data-f="in"> → <input type="time" value="${s.clock_out?hm(T(s.clock_out)):''}" data-f="out">
+      <button class="sec" data-a="sSave">Enregistrer</button><button class="sec" data-a="sDel">Supprimer</button>
+      ${s.clock_out?`<span class="small">${dur(shiftMs(s))}</span>`:isRun(s)?'<span class="flag" style="color:var(--on)">En cours</span>':'<span class="flag">Départ manquant</span>'}
+      ${s.source==='gérant'?'<span class="tag">modifié gérant</span>':''}</div>`).join('')||'<div class="small">Aucun pointage.</div>'}
+    <div class="shift" data-id="new" data-e="${esc(e.id)}"><input type="time" data-f="in"> → <input type="time" data-f="out"><button class="sec" data-a="sSave">Ajouter un service</button></div></div>`;
+  }).join('');
+  return `<div class="row"><button class="sec" data-a="dd" data-n="-1">‹</button><input type="date" id="daySel" value="${k}"><button class="sec" data-a="dd" data-n="1">›</button>
+  <h3 style="margin:0">${parse(k).toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}</h3></div>
+  <p class="small">Si l'heure de départ est avant l'arrivée, elle compte le lendemain. Chaque correction est marquée « modifié gérant ».</p>
+  ${list||'<div class="empty">Aucun salarié.</div>'}`;
+}
+function vTeam(){
+  const es=S.emps.slice().sort((a,b)=>(!a.active)-(!b.active)||a.name.localeCompare(b.name,'fr'));
+  return `<h3>Ajouter un salarié</h3><form id="fAdd" class="box form">
+  <label>Prénom Nom<input name="name" required maxlength="60"></label>
+  <label>Code PIN (4 chiffres)<input name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4" required></label>
+  <label>Contrat (h/semaine)<input name="hours" type="number" min="0" max="70" step="0.5" value="35"></label>
+  <button class="pri">Ajouter</button></form>
+  <h3>Équipe</h3>${es.map(e=>{const locked=e.locked_until&&T(e.locked_until)>Date.now();
+  return `<form class="box form fEmp" data-id="${esc(e.id)}"${e.active?'':' style="opacity:.6"'}>
+  <label>Nom<input name="name" value="${esc(e.name)}" required maxlength="60"></label>
+  <label>Contrat (h/sem.)<input name="hours" type="number" min="0" max="70" step="0.5" value="${esc(e.contract_hours??'')}"></label>
+  <label>Nouveau PIN (vide = inchangé)<input name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4"></label>
+  <button class="sec">Enregistrer</button>
+  <button type="button" class="sec" data-a="toggle" data-id="${esc(e.id)}">${e.active?'Désactiver':'Réactiver'}</button>
+  ${locked?`<button type="button" class="sec" data-a="unlock" data-id="${esc(e.id)}">Débloquer (trop d'essais)</button>`:''}</form>`}).join('')||'<div class="empty">Personne pour l\'instant.</div>'}
+  <p class="small">Un salarié désactivé disparaît de la pointeuse, ses heures restent dans l'historique. Les codes PIN sont chiffrés : personne ne peut les relire, on peut seulement les remplacer.</p>`;
+}
+function vDev(){
+  const mine=store.get('pointeuse_token');
+  return `<h3>Pointeuses actives</h3>${S.devices.map(d=>`<div class="box row" style="justify-content:space-between;margin-bottom:12px"><div><b>${esc(d.label)}</b><div class="small">Activée le ${new Date(T(d.created_at)).toLocaleDateString('fr-FR')}${d.last_seen?' · vue '+new Date(T(d.last_seen)).toLocaleString('fr-FR',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):''}</div></div>
+  <button class="sec" data-a="devDel" data-id="${esc(d.id)}">Retirer</button></div>`).join('')||'<div class="empty">Aucun appareil.</div>'}
+  <h3 style="margin-top:24px">Activer cet appareil comme pointeuse</h3>
+  <form id="fDev" class="box form"><label>Nom de l'appareil<input name="label" value="iPad caisse" maxlength="60"></label><button class="pri">Activer cet appareil</button></form>
+  <p class="small">${mine?'Cet appareil a déjà un jeton de pointeuse. ':''}À faire sur l'iPad du restaurant : connecte-toi ici, active-le, puis ouvre la pointeuse. Ensuite déconnecte-toi : la pointeuse continue de marcher sans ton compte. Pour la mettre en appli : Safari › Partager › « Sur l'écran d'accueil ».</p>`;
+}
+function vAdmin(){
+  return `<h3>Nouveau restaurant</h3><form id="fResto" class="box form"><label>Nom<input name="name" required maxlength="80" placeholder="Casa …"></label><button class="pri">Créer</button></form>
+  <h3>Restaurants</h3>${S.allRestos.map(r=>`<div class="box"><div class="row" style="justify-content:space-between"><div><b>${esc(r.name)}</b> <span class="tag ${r.active?'ok':'ko'}">${r.active?'Actif':'Coupé'}</span></div>
+  <button class="sec" data-a="rToggle" data-id="${esc(r.id)}">${r.active?'Couper l\'accès':'Réactiver'}</button></div>
+  <div class="small">Gérants :</div>${(S.managers[r.id]||[]).map(m=>`<div class="row" style="margin:6px 0">${esc(m.email)} <button class="sec" data-a="mDel" data-u="${esc(m.user_id)}" data-r="${esc(r.id)}">Retirer</button></div>`).join('')||'<div class="small">aucun</div>'}
+  <form class="form fMgr" data-r="${esc(r.id)}" style="margin-top:8px"><label>Email du gérant<input name="email" type="email" required></label><button class="sec">Donner l'accès</button></form></div>`).join('')}
+  <p class="small">Le compte du gérant se crée d'abord dans Supabase › Authentication › Add user. « Couper l'accès » bloque la pointeuse de ce restaurant (impayé, fin de contrat) sans effacer les données.</p>`;
+}
+
+/* ---------- csv ---------- */
+async function csv(kind){
+  let a,b,label;
+  if(kind==='week'){a=S.week;b=addD(S.week,7);label='semaine_'+ymd(a)}
+  else{a=new Date(S.week.getFullYear(),S.week.getMonth(),1);b=new Date(a.getFullYear(),a.getMonth()+1,1);label='mois_'+ymd(a).slice(0,7)}
+  const r=await sb.from('shifts').select('employee_id,clock_in,clock_out,source').eq('restaurant_id',S.R).gte('clock_in',a.toISOString()).lt('clock_in',b.toISOString()).order('clock_in').limit(10000);
+  if(r.error)return say(emsg(r.error),true);
+  const q=v=>'"'+String(v).replace(/"/g,'""')+'"',L=['Salarié;Date;Arrivée;Départ;Durée (h);Durée;Source'],tot={};
+  r.data.forEach(s=>{const n=empName(s.employee_id),t=s.clock_out?T(s.clock_out)-T(s.clock_in):0;tot[n]=(tot[n]||0)+t;
+    L.push([n,new Date(T(s.clock_in)).toLocaleDateString('fr-FR'),hm(T(s.clock_in)),s.clock_out?hm(T(s.clock_out)):'MANQUANT',dec(t),dur(t),s.source].map(q).join(';'))});
+  L.push('','Total par salarié');Object.keys(tot).sort().forEach(n=>L.push(q(n)+';;;;'+dec(tot[n])+';'+dur(tot[n])));
+  const blob=new Blob(['﻿'+L.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const el=document.createElement('a');el.href=URL.createObjectURL(blob);el.download=(resto()?resto().name:'resto').replace(/[^\w-]+/g,'_')+'_'+label+'.csv';
+  document.body.appendChild(el);el.click();setTimeout(()=>{URL.revokeObjectURL(el.href);el.remove()},2000);
+  say('Export prêt.');
+}
+function toISO(k,t){const[h,m]=t.split(':').map(Number);const d=parse(k);d.setHours(h,m,0,0);return d}
+
+/* ---------- événements ---------- */
+document.addEventListener('click',async ev=>{
+  const t=ev.target.closest('[data-a]');if(!t)return;
+  const a=t.dataset.a,id=t.dataset.id;
+  if(a==='logout'){await sb.auth.signOut();S.user=null;S.msg='';render();return}
+  if(a==='tab'){S.tab=t.dataset.t;S.msg='';loadResto();return}
+  if(a==='refresh'){loadResto();return}
+  if(a==='wk'){S.week=addD(S.week,+t.dataset.n);loadResto();return}
+  if(a==='dd'){S.day=ymd(addD(parse(S.day),+t.dataset.n));loadResto();return}
+  if(a==='goDay'){S.day=t.dataset.d;S.tab='jour';loadResto();return}
+  if(a==='csv'){csv(t.dataset.r);return}
+  if(a==='toggle'){const e=S.emps.find(x=>x.id===id);act(sb.from('employees').update({active:!e.active}).eq('id',id),'Enregistré.');return}
+  if(a==='unlock'){act(sb.rpc('unlock_employee',{p_employee:id}),'Débloqué.');return}
+  if(a==='devDel'){act(sb.from('kiosk_devices').delete().eq('id',id),'Appareil retiré.');return}
+  if(a==='rToggle'){const r=S.allRestos.find(x=>x.id===id);await act(sb.from('restaurants').update({active:!r.active}).eq('id',id),'Enregistré.');const rr=await sb.from('restaurants').select('id,name,active').order('name');S.restos=rr.data||[];render();return}
+  if(a==='mDel'){act(sb.rpc('admin_remove_manager',{p_user:t.dataset.u,p_restaurant:t.dataset.r}),'Accès retiré.');return}
+  if(a==='sSave'||a==='sDel'){
+    const row=t.closest('.shift'),sid=row.dataset.id;
+    if(a==='sDel'){act(sb.from('shifts').delete().eq('id',sid),'Supprimé.');return}
+    const vi=row.querySelector('[data-f=in]').value,vo=row.querySelector('[data-f=out]').value;
+    if(!vi)return say('Heure d\'arrivée obligatoire.',true);
+    const ti=toISO(S.day,vi);let to=vo?toISO(S.day,vo):null;if(to&&to<=ti)to=addD(to,1);
+    const body={clock_in:ti.toISOString(),clock_out:to?to.toISOString():null};
+    if(sid==='new')act(sb.from('shifts').insert({...body,employee_id:row.dataset.e}),'Service ajouté.');
+    else act(sb.from('shifts').update(body).eq('id',sid),'Enregistré.');
+  }
+});
+document.addEventListener('change',ev=>{
+  if(ev.target.id==='daySel'&&ev.target.value){S.day=ev.target.value;loadResto()}
+  if(ev.target.id==='selR'){S.R=ev.target.value;store.set('pointeuse_resto',S.R);loadResto()}
+});
+document.addEventListener('submit',async ev=>{
+  ev.preventDefault();
+  const f=ev.target,v=Object.fromEntries(new FormData(f));
+  if(f.id==='fLogin'){
+    const {error}=await sb.auth.signInWithPassword({email:v.email.trim(),password:v.password});
+    if(error){S.msg='Email ou mot de passe incorrect.';S.err=true;return render()}
+    S.msg='';boot();return;
+  }
+  if(f.id==='fAdd'){
+    const r=await sb.from('employees').insert({restaurant_id:S.R,name:v.name.trim(),contract_hours:v.hours===''?null:Number(v.hours),active:true}).select('id').single();
+    if(r.error)return say(emsg(r.error),true);
+    const p=await sb.rpc('set_employee_pin',{p_employee:r.data.id,p_pin:v.pin});
+    if(p.error){await sb.from('employees').delete().eq('id',r.data.id);return say(emsg(p.error),true)}
+    say('Salarié ajouté.');loadResto();return;
+  }
+  if(f.classList.contains('fEmp')){
+    const id=f.dataset.id;
+    if(v.pin){const p=await sb.rpc('set_employee_pin',{p_employee:id,p_pin:v.pin});if(p.error)return say(emsg(p.error),true)}
+    act(sb.from('employees').update({name:v.name.trim(),contract_hours:v.hours===''?null:Number(v.hours)}).eq('id',id),'Enregistré.');return;
+  }
+  if(f.id==='fDev'){
+    const r=await sb.rpc('add_kiosk_device',{p_restaurant:S.R,p_label:v.label});
+    if(r.error)return say(emsg(r.error),true);
+    store.set('pointeuse_token',r.data);
+    say('Appareil activé. Ouvre la pointeuse avec le bouton en haut.');loadResto();return;
+  }
+  if(f.id==='fResto'){
+    const r=await sb.from('restaurants').insert({name:v.name.trim()});
+    if(r.error)return say(emsg(r.error),true);
+    const rr=await sb.from('restaurants').select('id,name,active').order('name');S.restos=rr.data||[];if(!S.R&&S.restos[0])S.R=S.restos[0].id;
+    say('Restaurant créé.');loadResto();return;
+  }
+  if(f.classList.contains('fMgr')){act(sb.rpc('admin_assign_manager',{p_email:v.email,p_restaurant:f.dataset.r}),'Accès donné.');return}
+});
+setInterval(()=>{if(S.user&&S.tab==='direct'&&!document.hidden&&!S.loading)loadResto()},30000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&S.user&&S.tab==='direct')loadResto()});
+boot();
+}
+</script>
+</body>
+</html>
