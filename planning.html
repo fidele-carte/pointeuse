@@ -38,7 +38,8 @@ const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},s
 const token=new URLSearchParams(location.search).get('t')||'';
 const C=window.POINTEUSE_CONFIG||{};
 let sb=null;try{sb=supabase.createClient(C.url,C.key,{auth:{persistSession:false,autoRefreshToken:false}})}catch(e){}
-const S={week:monday(new Date()),data:null,me:store.get('planning_me')||'',err:''};
+const qme=new URLSearchParams(location.search).get('me');if(qme)store.set('planning_me',qme);
+const S={week:monday(new Date()),data:null,me:qme||store.get('planning_me')||'',err:''};
 
 function render(){
   const app=$('#app'),top=`<div class="top"><div class="bar"><img class="logo s" src="logo.png" alt="Casa Di Meco"><div class="resto">Planning${S.data?' · '+esc(S.data.name):''}</div></div></div>`;

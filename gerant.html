@@ -45,7 +45,7 @@ const effRate=e=>{if(!e)return 0;if(e.pay_type==='month'){const h=Number(e.contr
 const payLabel=e=>e.pay_type==='month'?(e.monthly_net?String(e.monthly_net).replace('.',',')+' € net/mois':'mensuel à saisir'):(e.hourly_rate?String(e.hourly_rate).replace('.',',')+' € net/h':'taux à saisir');
 const planOf=(id,k)=>S.planned.filter(p=>p.employee_id===id&&p.day===k).sort((a,b)=>tmin(a.start_time)-tmin(b.start_time));
 const shiftsOf=(id,k)=>S.shifts.filter(s=>s.employee_id===id&&sDay(s)===k);
-const ERR={planned_empty:'Heure de début et de fin identiques.',pin_taken:'Ce code est déjà utilisé par un autre salarié.',pin_format:'Le code doit faire 4 chiffres.',forbidden:'Action non autorisée.',user_not_found:'Aucun compte avec cet email : crée-le d\'abord dans Supabase › Authentication.'};
+const ERR={employees_phone_check:'Numéro de téléphone invalide.',planned_empty:'Heure de début et de fin identiques.',pin_taken:'Ce code est déjà utilisé par un autre salarié.',pin_format:'Le code doit faire 4 chiffres.',forbidden:'Action non autorisée.',user_not_found:'Aucun compte avec cet email : crée-le d\'abord dans Supabase › Authentication.'};
 const emsg=e=>{const m=(e&&e.message)||'';for(const k in ERR)if(m.includes(k))return ERR[k];return /fetch|network/i.test(m)?'Pas de connexion.':'Erreur : '+m};
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
 
@@ -91,7 +91,7 @@ async function loadResto(){
   S.loading=true;render();
   const [a,b]=range();
   const [e,s,d,pl,rv]=await Promise.all([
-    sb.from('employees').select('id,name,contract_hours,hourly_rate,pay_type,monthly_net,active,locked_until').eq('restaurant_id',S.R).order('name'),
+    sb.from('employees').select('id,name,contract_hours,hourly_rate,pay_type,monthly_net,phone,active,locked_until').eq('restaurant_id',S.R).order('name'),
     sb.from('shifts').select('id,employee_id,clock_in,clock_out,source').eq('restaurant_id',S.R).gte('clock_in',a.toISOString()).lt('clock_in',b.toISOString()).order('clock_in').limit(5000),
     sb.from('kiosk_devices').select('id,label,created_at,last_seen').eq('restaurant_id',S.R).order('created_at'),
     sb.from('planned_shifts').select('id,employee_id,day,start_time,end_time,note').eq('restaurant_id',S.R).gte('day',ymd(addD(a,-1))).lt('day',ymd(b)).order('day').limit(5000),
@@ -215,6 +215,7 @@ function vTeam(){
   <label>Contrat (h/semaine)<input name="hours" type="number" min="0" max="70" step="0.5" value="35"></label>
   <label>Salaire<select name="ptype"><option value="hour">Net de l'heure</option><option value="month">Net par mois</option></select></label>
   <label>Montant net (€)<input name="amount" type="number" min="0" max="20000" step="0.01" inputmode="decimal"></label>
+  <label>Téléphone (WhatsApp)<input name="phone" type="tel" inputmode="tel" placeholder="06 12 34 56 78" maxlength="20"></label>
   <button class="pri">Ajouter</button></form>
   <h3>Équipe</h3>${es.map(e=>{const locked=e.locked_until&&T(e.locked_until)>Date.now();
   return `<form class="box form fEmp" data-id="${esc(e.id)}"${e.active?'':' style="opacity:.6"'}>
@@ -223,6 +224,7 @@ function vTeam(){
   <label>Salaire<select name="ptype"><option value="hour"${e.pay_type!=='month'?' selected':''}>Net de l'heure</option><option value="month"${e.pay_type==='month'?' selected':''}>Net par mois</option></select></label>
   <label>Montant net (€)<input name="amount" type="number" min="0" max="20000" step="0.01" inputmode="decimal" value="${esc((e.pay_type==='month'?e.monthly_net:e.hourly_rate)??'')}"></label>
   ${e.pay_type==='month'&&effRate(e)?`<div class="small" style="align-self:center">≈ ${effRate(e).toFixed(2).replace('.',',')} € net/h</div>`:''}
+  <label>Téléphone (WhatsApp)<input name="phone" type="tel" inputmode="tel" placeholder="06 12 34 56 78" maxlength="20" value="${esc(e.phone??'')}"></label>
   <label>Nouveau PIN (vide = inchangé)<input name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4"></label>
   <button class="sec">Enregistrer</button>
   <button type="button" class="sec" data-a="toggle" data-id="${esc(e.id)}">${e.active?'Désactiver':'Réactiver'}</button>
@@ -267,9 +269,38 @@ function vPlanning(){
   <div class="scroll"><table><thead><tr><th>Salarié</th>${ds.map((d,i)=>`<th style="text-align:left">${DOW[i]} ${d.getDate()}</th>`).join('')}<th>Total</th></tr></thead><tbody>${rows}</tbody></table></div>
   <div class="row" style="margin-top:14px"><button class="sec" data-a="pCopy">Copier la semaine précédente</button><button class="sec" data-a="pClear">Vider cette semaine</button></div>`
   :'<div class="empty">Ajoute d\'abord ton équipe dans l\'onglet Équipe.</div>'}
+  ${act.length&&url?sendBox(ds,act,url):''}
   <div class="box"><b>Lien planning pour les salariés</b><p class="small">Envoie ce lien sur le groupe de l'équipe : chacun voit le planning sur son téléphone, sans compte. Il est aussi accessible depuis la pointeuse.</p>
   ${url?`<div class="row"><input id="plUrl" readonly value="${esc(url)}" style="flex:1;min-width:220px"><button class="pri" data-a="pLink">Copier</button><button class="sec" data-a="pReset">Changer le lien</button></div>`:'<div class="small">Lien indisponible.</div>'}</div>
   <p class="small">Un service qui finit après minuit (ex. 19:00–00:30) compte sur le jour où il commence.</p>`;
+}
+// ---------- envoi WhatsApp ----------
+const waNum=p=>{let d=String(p||'').replace(/[^\d+]/g,'');if(d.startsWith('+'))d=d.slice(1);else if(d.startsWith('00'))d=d.slice(2);else if(d.startsWith('0'))d='33'+d.slice(1);return d.length>=10?d:''};
+const hh=ms=>{const m=Math.round(ms/60000);return Math.floor(m/60)+'h'+(m%60?String(m%60).padStart(2,'0'):'')};
+function msgFor(e,ds,url){
+  const r=resto(),lines=[];let tot=0;
+  ds.forEach((d,i)=>{const pp=planOf(e.id,ymd(d));if(!pp.length)return;pp.forEach(p=>tot+=pLen(p));
+    lines.push('- '+DOW[i]+' '+d.getDate()+' : '+pp.map(p=>t5(p.start_time).replace(':','h')+'-'+t5(p.end_time).replace(':','h')).join(' / '))});
+  const first=e.name.split(' ')[0];
+  const head=`Salut ${first.charAt(0)+first.slice(1).toLowerCase()}, voici ton planning ${r?r.name:''} pour la semaine du ${ds[0].toLocaleDateString('fr-FR',{day:'numeric',month:'long'})} :`;
+  return lines.length?`${head}\n${lines.join('\n')}\nTotal : ${hh(tot)}\n\nPlanning complet : ${url}&me=${e.id}`
+                     :`${head}\nPas de service prévu cette semaine.\n\nPlanning complet : ${url}&me=${e.id}`;
+}
+function groupMsg(ds,url){
+  const r=resto(),out=[`Planning ${r?r.name:''}, semaine du ${ds[0].toLocaleDateString('fr-FR',{day:'numeric',month:'long'})}`];
+  ds.forEach((d,i)=>{const pp=S.planned.filter(p=>p.day===ymd(d)).sort((a,b)=>tmin(a.start_time)-tmin(b.start_time));if(!pp.length)return;
+    out.push('','*'+DOW[i]+' '+d.getDate()+'*');pp.forEach(p=>out.push('- '+empName(p.employee_id)+' : '+t5(p.start_time).replace(':','h')+'-'+t5(p.end_time).replace(':','h')))});
+  out.push('','Chacun peut voir ses horaires ici : '+url);return out.join('\n');
+}
+function sendBox(ds,act,url){
+  const rows=act.map(e=>{const n=waNum(e.phone),has=planOf(e.id,ymd(ds[0]))&&ds.some(d=>planOf(e.id,ymd(d)).length);
+    const href='https://wa.me/'+(n||'')+'?text='+encodeURIComponent(msgFor(e,ds,url));
+    return `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding-top:8px;margin:8px 0 0"><div><b>${esc(e.name)}</b><div class="small">${has?ds.filter(d=>planOf(e.id,ymd(d)).length).length+' jour(s) au planning':'rien cette semaine'}${n?'':' · pas de numéro (tu choisiras le contact)'}</div></div>
+    <a class="pri" href="${esc(href)}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border-radius:12px;font-weight:700;text-decoration:none;background:#25a35a;color:#fff">WhatsApp</a></div>`}).join('');
+  const gh='https://wa.me/?text='+encodeURIComponent(groupMsg(ds,url));
+  return `<div class="box"><b>Envoyer le planning sur WhatsApp</b><p class="small">Un bouton par salarié : WhatsApp s'ouvre avec son planning de la semaine et son lien personnel déjà écrits, tu n'as plus qu'à appuyer sur Envoyer. Ajoute les numéros dans Équipe pour ouvrir directement la bonne conversation.</p>
+  <a href="${esc(gh)}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border-radius:12px;font-weight:700;text-decoration:none;background:#25a35a;color:#fff">Envoyer tout le planning au groupe</a>
+  ${rows}</div>`;
 }
 function caDay(k){
   const r=resto(),coef=r?Number(r.charges_coef)||1.8:1.8,miss=new Set();
@@ -309,9 +340,9 @@ function vCa(){
   <form id="fCoef" class="box form" style="max-width:520px"><label>Coefficient net → coût employeur<input name="coef" type="number" min="1" max="2.5" step="0.01" value="${esc(r?r.charges_coef:1.8)}"></label><button class="sec">Enregistrer</button></form>
   <p class="small">1,80 par défaut (ordre de grandeur sans réductions de charges). Près du SMIC, avec les réductions, le vrai chiffre est souvent plus bas : demande-le à ton comptable, ou calcule-le avec une fiche de paie (coût total employeur ÷ net payé).</p>`;
 }
-function payOf(v){const a=v.amount===''?null:Number(v.amount);
+function payOf(v){const a=v.amount===''?null:Number(v.amount),ph=(v.phone||'').trim()||null;
   const h=Number(v.hours)||0;
-  return v.ptype==='month'?{pay_type:'month',monthly_net:a,hourly_rate:a!==null&&h?Math.round(a/(h*52/12)*100)/100:null}:{pay_type:'hour',hourly_rate:a,monthly_net:null}}
+  return v.ptype==='month'?{phone:ph,pay_type:'month',monthly_net:a,hourly_rate:a!==null&&h?Math.round(a/(h*52/12)*100)/100:null}:{phone:ph,pay_type:'hour',hourly_rate:a,monthly_net:null}}
 async function saveRev(el){
   const k=el.dataset.d,v=el.value.trim();
   const r=v===''?await sb.from('daily_revenue').delete().eq('restaurant_id',S.R).eq('day',k)
